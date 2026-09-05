@@ -4,9 +4,18 @@ import ProductModel from "../product/product.model";
 import ShopModel from "../shop/shop.model";
 import { NON_SALE_STATUSES } from "../order/order.enum";
 import OrderModel from "../order/order.model";
+import { PurchaseStatus } from "../purchase/purchase.enum";
+import PurchaseModel from "../purchase/purchase.model";
+import DeliveryModel from "../delivery/delivery.model";
+import { DeliveryStatus } from "../delivery/delivery.enum";
+import PaymentModel from "../payment/payment.model";
+import UserModel from "../user/user.model";
+import { FIELD_FORCE_ROLES } from "../user/user.enum";
 
 // Orders in a non-sale status (cancelled) are excluded from every money report.
 const SALE_MATCH = { status: { $nin: NON_SALE_STATUSES } };
+// Purchases in a non-received-yet / cancelled status don't count as real spend.
+const PURCHASE_MATCH = { status: { $ne: PurchaseStatus.CANCELLED } };
 
 export class ReportService {
   // ---------------------------------------------------------------------
@@ -442,6 +451,187 @@ export class ReportService {
       totalProducts,
       totalShops,
     };
+  }
+
+  // ---------------------------------------------------------------------
+  // Purchase report - totals + per-supplier + per-product spend for a range
+  // ---------------------------------------------------------------------
+  async getPurchaseReport(query: Record<string, unknown>) {
+    const { startDate, endDate } = resolveDateRange(
+      query.startDate as string | undefined,
+      query.endDate as string | undefined
+    );
+
+    const match: Record<string, unknown> = {
+      ...PURCHASE_MATCH,
+      purchaseDate: { $gte: startDate, $lte: endDate },
+    };
+    if (query.supplier)
+      match.supplier = new Types.ObjectId(query.supplier as string);
+
+    const [summary] = await PurchaseModel.aggregate([
+      { $match: match },
+      {
+        $group: {
+          _id: null,
+          totalPurchases: { $sum: 1 },
+          totalAmount: { $sum: "$totalAmount" },
+          totalPaid: { $sum: "$paidAmount" },
+        },
+      },
+      { $project: { _id: 0 } },
+    ]);
+
+    const bySupplier = await PurchaseModel.aggregate([
+      { $match: match },
+      {
+        $group: {
+          _id: "$supplier",
+          totalPurchases: { $sum: 1 },
+          totalAmount: { $sum: "$totalAmount" },
+          totalPaid: { $sum: "$paidAmount" },
+        },
+      },
+      { $sort: { totalAmount: -1 } },
+      {
+        $lookup: {
+          from: "suppliers",
+          localField: "_id",
+          foreignField: "_id",
+          as: "supplier",
+        },
+      },
+      { $unwind: "$supplier" },
+      {
+        $project: {
+          _id: 0,
+          supplier: "$_id",
+          supplierName: "$supplier.supplierName",
+          totalPurchases: 1,
+          totalAmount: 1,
+          totalPaid: 1,
+          totalDue: { $subtract: ["$totalAmount", "$totalPaid"] },
+        },
+      },
+    ]);
+
+    const byProduct = await PurchaseModel.aggregate([
+      { $match: match },
+      { $unwind: "$items" },
+      {
+        $group: {
+          _id: "$items.product",
+          productName: { $first: "$items.productName" },
+          sku: { $first: "$items.sku" },
+          totalPiecesPurchased: { $sum: "$items.totalPieces" },
+          totalAmount: { $sum: "$items.subtotalCost" },
+        },
+      },
+      { $sort: { totalAmount: -1 } },
+      {
+        $project: {
+          _id: 0,
+          product: "$_id",
+          productName: 1,
+          sku: 1,
+          totalPiecesPurchased: 1,
+          totalAmount: 1,
+        },
+      },
+    ]);
+
+    return {
+      range: { startDate, endDate },
+      summary: summary || { totalPurchases: 0, totalAmount: 0, totalPaid: 0 },
+      bySupplier,
+      byProduct,
+    };
+  }
+
+  // ---------------------------------------------------------------------
+  // SR / DSR / DM performance report - deliveries handled + due collected
+  // per field-force user, for a date range.
+  // ---------------------------------------------------------------------
+  async getFieldForceReport(query: Record<string, unknown>) {
+    const { startDate, endDate } = resolveDateRange(
+      query.startDate as string | undefined,
+      query.endDate as string | undefined
+    );
+
+    const userFilter: Record<string, unknown> = {
+      role: { $in: FIELD_FORCE_ROLES },
+    };
+    if (query.role) userFilter.role = query.role;
+    if (query.territory) userFilter.territory = query.territory;
+
+    const users = await UserModel.find(userFilter).select(
+      "name role territory reportsTo"
+    );
+
+    const deliveryStats = await DeliveryModel.aggregate([
+      {
+        $match: {
+          assignedTo: { $ne: null },
+          createdAt: { $gte: startDate, $lte: endDate },
+        },
+      },
+      {
+        $group: {
+          _id: "$assignedTo",
+          totalAssigned: { $sum: 1 },
+          delivered: {
+            $sum: {
+              $cond: [{ $eq: ["$status", DeliveryStatus.DELIVERED] }, 1, 0],
+            },
+          },
+          failed: {
+            $sum: {
+              $cond: [{ $eq: ["$status", DeliveryStatus.FAILED] }, 1, 0],
+            },
+          },
+        },
+      },
+    ]);
+
+    const collectionStats = await PaymentModel.aggregate([
+      { $match: { paymentDate: { $gte: startDate, $lte: endDate } } },
+      {
+        $group: {
+          _id: "$receivedBy",
+          totalCollected: { $sum: "$amount" },
+          paymentCount: { $sum: 1 },
+        },
+      },
+    ]);
+
+    const deliveryMap = new Map(
+      deliveryStats.map((d) => [String(d._id), d])
+    );
+    const collectionMap = new Map(
+      collectionStats.map((c) => [String(c._id), c])
+    );
+
+    const data = users.map((user) => {
+      const delivery = deliveryMap.get(String(user._id));
+      const collection = collectionMap.get(String(user._id));
+      return {
+        user: user._id,
+        name: user.name,
+        role: user.role,
+        territory: user.territory || null,
+        deliveries: {
+          totalAssigned: delivery?.totalAssigned || 0,
+          delivered: delivery?.delivered || 0,
+          failed: delivery?.failed || 0,
+        },
+        collection: {
+          totalCollected: collection?.totalCollected || 0,
+          paymentCount: collection?.paymentCount || 0,
+        },
+      };
+    });
+
+    return { range: { startDate, endDate }, data };
   }
 }
 

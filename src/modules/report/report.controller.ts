@@ -117,4 +117,35 @@ router.get(
   })
 );
 
+router.get(
+  "/purchases",
+  isAuth,
+  authorize(Role.ADMIN, Role.MANAGER),
+  catchAsync(async (req, res) => {
+    const data = await reportService.getPurchaseReport(req.query);
+    sendResponse(res, {
+      success: true,
+      statusCode: httpStatus.OK,
+      message: "Purchase report generated successfully",
+      data,
+    });
+  })
+);
+
+// SR/DSR/DM-wise performance: deliveries handled + due collected in a range.
+router.get(
+  "/field-force",
+  isAuth,
+  authorize(Role.ADMIN, Role.MANAGER, Role.DM),
+  catchAsync(async (req, res) => {
+    const data = await reportService.getFieldForceReport(req.query);
+    sendResponse(res, {
+      success: true,
+      statusCode: httpStatus.OK,
+      message: "SR/DSR/DM performance report generated successfully",
+      data,
+    });
+  })
+);
+
 export const reportRoute = router;

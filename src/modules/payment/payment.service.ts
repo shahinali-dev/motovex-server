@@ -272,6 +272,56 @@ export class PaymentService {
       },
     };
   }
+  /**
+   * SR/DSR/DM-wise collection report — how much due each field-force user
+   * has collected in a date range, grouped by who received the payment
+   * (`Payment.receivedBy`). Useful for daily/weekly SR/DSR performance review.
+   */
+  async getCollectionsByCollector(query: Record<string, unknown>) {
+    const { startDate, endDate } = resolveDateRange(
+      query.startDate as string | undefined,
+      query.endDate as string | undefined
+    );
+
+    const filter: Record<string, unknown> = {
+      paymentDate: { $gte: startDate, $lte: endDate },
+    };
+    if (query.receivedBy) filter.receivedBy = new Types.ObjectId(String(query.receivedBy));
+
+    const results = await PaymentModel.aggregate([
+      { $match: filter },
+      {
+        $group: {
+          _id: "$receivedBy",
+          totalCollected: { $sum: "$amount" },
+          paymentCount: { $sum: 1 },
+        },
+      },
+      { $sort: { totalCollected: -1 as const } },
+      {
+        $lookup: {
+          from: "users",
+          localField: "_id",
+          foreignField: "_id",
+          as: "user",
+        },
+      },
+      { $unwind: "$user" },
+      {
+        $project: {
+          _id: 0,
+          collectedBy: "$_id",
+          name: "$user.name",
+          role: "$user.role",
+          territory: "$user.territory",
+          totalCollected: 1,
+          paymentCount: 1,
+        },
+      },
+    ]);
+
+    return { range: { startDate, endDate }, data: results };
+  }
 }
 
 export const paymentService = new PaymentService();
