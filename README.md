@@ -1,8 +1,10 @@
 # Motovex — Lube & Care Dealership Management API
 
 Backend API for **Motovex**, a lube & spare-parts dealership business management
-system: authentication, product & inventory management (Box/Pieces units),
-shops, orders, and a full suite of sales/inventory/profit reports.
+system: authentication (with email OTP verification & password reset),
+customers/shops, suppliers, purchases, product & inventory management
+(Box/Pieces units), sales orders, deliveries (SR/DSR/DM field-force),
+dues/collections, and a full suite of sales/purchase/inventory/profit reports.
 
 Built with **Express + TypeScript + Mongoose**, following the same modular
 architecture (`controller / service / model / interface / validation` per
@@ -17,6 +19,19 @@ feature) as the reference repo
 npm install
 cp .env.example .env    # then edit values (DB_URL, JWT secrets, etc.)
 ```
+
+**Email (OTP / password reset)**: sent via Gmail through `nodemailer`
+(`src/utils/email/email.service.ts`), rendered from the Nunjucks templates in
+`/views`. Set `APP_EMAIL` to a Gmail address and `APP_PASSWORD` to a
+[Gmail App Password](https://myaccount.google.com/apppasswords) (not the
+normal account password — Google blocks plain-password SMTP login).
+
+**File uploads** (currently only the purchase payment receipt/invoice) are
+saved to local disk under `UPLOAD_DIR` (default `./uploads`, served from
+`/uploads`). This is intentionally behind `src/utils/storage`'s
+`IStorageService` interface — moving to S3/R2 later means writing one new
+`S3StorageService` and swapping the single export in
+`src/utils/storage/index.ts`; no call sites change.
 
 Start MongoDB locally (or use Atlas), then:
 
@@ -48,9 +63,12 @@ npm run prod
 
 | Role      | Can do |
 |-----------|--------|
-| `admin`   | Everything — manage users, shops, products, stock, orders, all reports |
-| `manager` | Manage shops/products/stock/orders, view all reports |
+| `admin`   | Everything — manage users, shops, suppliers, products, stock, purchases, orders, deliveries, all reports |
+| `manager` | Manage shops/suppliers/products/stock/purchases/orders/deliveries, view reports |
 | `staff`   | View shops/products, create orders & update order status — **cannot** see cost/profit reports or manage users |
+| `dm`      | Distribution Manager — oversees a territory: assign/track deliveries for their SRs/DSRs, view field-force reports |
+| `dsr`     | Distributor Sales Representative — field sales: book orders, deliver, collect due payments |
+| `sr`      | Sales Representative — books orders / assists deliveries in a territory |
 
 ---
 
@@ -121,9 +139,16 @@ All routes are prefixed with `/api/v1`. Send the JWT either as an
 ### Auth
 | Method | Route | Access | Description |
 |---|---|---|---|
-| POST | `/auth/signin` | Public | `{ email, password }` → sets cookies + returns token |
+| POST | `/auth/signin` | Public | `{ email, password }`. If the account isn't verified yet, sends an OTP and returns `403` with a verify-token (cookie for web, in the body for mobile via `x-client-type` header) instead of logging in. |
+| POST | `/auth/verify-otp` | Verify-token | `{ otp }` — confirms the emailed 6-digit OTP, marks the account verified, and logs the user in (sets cookies / returns tokens) |
+| POST | `/auth/resend-otp` | Verify-token | Resends a fresh OTP to the account's email |
+| POST | `/auth/refresh-token` | Public (needs refresh token) | Issues a new access token from a valid refresh token (cookie for web, `{ refreshToken }` body for mobile) |
+| POST | `/auth/forgot-password` | Public | `{ email }` — emails a password-reset OTP (always returns a generic success message, doesn't leak whether the email exists) |
+| POST | `/auth/reset-password` | Public | `{ email, otp, newPassword }` — resets the password after OTP verification |
 | GET  | `/auth/me` | Authenticated | Current user info |
 | POST | `/auth/signout` | Authenticated | Clears cookies |
+
+Send `x-client-type: web` (cookies) or any other value / omit it (bearer tokens in the JSON body) to switch between the web and mobile response shapes on every route above.
 
 ### Users
 | Method | Route | Access | Description |
@@ -134,7 +159,7 @@ All routes are prefixed with `/api/v1`. Send the JWT either as an
 | PATCH| `/users/:id` | Admin | Update name/role/phone/isActive |
 | DELETE | `/users/:id` | Admin | Delete a user |
 
-### Shops
+### Shops / Customers
 | Method | Route | Access | Description |
 |---|---|---|---|
 | POST | `/shops` | Admin, Manager | `{ shopName, ownerName, contactInfo: { phone, email?, address? } }` |
@@ -142,6 +167,18 @@ All routes are prefixed with `/api/v1`. Send the JWT either as an
 | GET  | `/shops/:id` | Authenticated | Get one shop |
 | PATCH| `/shops/:id` | Admin, Manager | Update shop |
 | DELETE | `/shops/:id` | Admin | Delete shop |
+
+> `/api/v1/customers` is mounted as an alias for the exact same routes —
+> in this dealership domain a "customer" *is* a shop, so both names work.
+
+### Suppliers
+| Method | Route | Access | Description |
+|---|---|---|---|
+| POST | `/suppliers` | Admin, Manager | `{ supplierName, contactPerson?, contactInfo: { phone, email?, address? } }` |
+| GET  | `/suppliers` | Authenticated | List (`?search=&isActive=&page=&limit=`) |
+| GET  | `/suppliers/:id` | Authenticated | Get one supplier |
+| PATCH| `/suppliers/:id` | Admin, Manager | Update supplier |
+| DELETE | `/suppliers/:id` | Admin | Delete supplier |
 
 ### Products
 | Method | Route | Access | Description |
@@ -173,7 +210,34 @@ Create product body:
 | POST | `/stock/:productId/adjust` | Admin, Manager | `{ quantity, unit: "box"|"pieces", direction: "in"|"out", note? }` |
 | GET  | `/stock/:productId/logs` | Authenticated | Paginated movement history for a product |
 
-### Orders
+### Purchases (buying stock in from a supplier)
+| Method | Route | Access | Description |
+|---|---|---|---|
+| POST | `/purchases` | Admin, Manager | Create a purchase (body below), status starts `pending` |
+| GET  | `/purchases` | Authenticated | List (`?supplier=&status=&paymentStatus=&startDate=&endDate=&page=&limit=`) |
+| GET  | `/purchases/:id` | Authenticated | Get one purchase |
+| PATCH| `/purchases/:id/status` | Admin, Manager | `{ status, note? }` — `pending → received` (adds stock, refreshes product cost price) or `→ cancelled`; `received → returned` (removes stock again) |
+| POST | `/purchases/:id/payment` | Admin, Manager | `multipart/form-data`: `amount`, `note?`, `attachment?` (bank-transfer receipt / supplier invoice — jpg/png/webp/pdf, max 5MB) — records money paid to the supplier |
+| GET  | `/purchases/due-suppliers` | Authenticated | Every supplier with an outstanding payable balance |
+
+Payments are manual (bank transfer / cash / cheque) — there's no online payment
+gateway anywhere in this API, on either the purchase or sales/order side.
+Recording a purchase payment just logs it (with an optional receipt/invoice
+file) against the purchase's `paymentHistory`; the money itself moves outside
+the app.
+
+Create purchase body:
+```json
+{
+  "supplier": "<supplierId>",
+  "invoiceNumber": "INV-1042",
+  "items": [
+    { "product": "<productId>", "quantity": 10, "unit": "box", "unitCostPrice": 430 }
+  ]
+}
+```
+
+### Orders (sales)
 | Method | Route | Access | Description |
 |---|---|---|---|
 | POST | `/orders` | Admin, Manager, Staff | Create order (body below) |
@@ -193,7 +257,16 @@ Create order body:
 }
 ```
 
-### Payments / Due tracking
+### Deliveries (SR / DSR / DM field-force)
+| Method | Route | Access | Description |
+|---|---|---|---|
+| POST | `/deliveries` | Admin, Manager, Staff, DM | `{ order, assignedTo?, scheduledDate?, address?, notes? }` — order must be `pending`/`processing` |
+| GET  | `/deliveries` | Authenticated | List (`?status=&assignedTo=&shop=&page=&limit=`) |
+| GET  | `/deliveries/:id` | Authenticated | Get one delivery |
+| PATCH| `/deliveries/:id/assign` | Admin, Manager, DM | `{ assignedTo }` — assign/reassign to an SR/DSR/DM user |
+| PATCH| `/deliveries/:id/status` | Admin, Manager, Staff, DM, DSR, SR | `{ status, note? }` — `pending → out_for_delivery → delivered/failed`; marking `delivered` also flips the linked order to `delivered` |
+
+### Payments / Due & Collection tracking
 | Method | Route | Access | Description |
 |---|---|---|---|
 | POST | `/payments/orders/:orderId` | Authenticated | Record a payment: `{ amount, method, note?, paymentDate? }`. Send `amount` = current due for a full settlement, or less for a partial payment. Rejects if `amount` > due, or if order is `cancelled`/`returned`. |
@@ -202,6 +275,7 @@ Create order body:
 | GET  | `/payments/due-shops` | Authenticated | **Due shop list** — every shop with an outstanding balance, sorted most-due-first, with `totalDue/totalBilled/totalPaid/dueOrderCount` |
 | GET  | `/payments/due-shops/:shopId` | Authenticated | Due summary + the actual list of unpaid/partial orders for one shop |
 | GET  | `/payments/summary` | Authenticated | Dashboard totals: overall outstanding due + amount collected in a date range (`?startDate=&endDate=`) |
+| GET  | `/payments/collections` | Authenticated | **SR/DSR/DM-wise collection report** — who collected how much, in a date range (`?startDate=&endDate=&receivedBy=`) |
 
 `PaymentMethod`: `cash \| bkash \| nagad \| rocket \| bank_transfer \| cheque \| other`
 
@@ -211,6 +285,8 @@ Create order body:
 | GET | `/reports/inventory` | Authenticated | Current stock + stock valuation (`?category=&isActive=`) |
 | GET | `/reports/low-stock` | Authenticated | Products at/below their threshold |
 | GET | `/reports/sales` | Admin, Manager | Sales totals + by-product + by-shop (`?startDate=&endDate=&shop=&product=`) |
+| GET | `/reports/purchases` | Admin, Manager | Purchase spend totals + by-supplier + by-product (`?startDate=&endDate=&supplier=`) |
+| GET | `/reports/field-force` | Admin, Manager, DM | SR/DSR/DM-wise deliveries handled + due collected (`?startDate=&endDate=&role=&territory=`) |
 | GET | `/reports/daily` | Admin, Manager | Single day sales & profit (`?date=YYYY-MM-DD`, default today) |
 | GET | `/reports/monthly` | Admin, Manager | Month totals + day-by-day breakdown (`?month=1-12&year=`) |
 | GET | `/reports/yearly` | Admin, Manager | Year totals + month-by-month breakdown (`?year=`) |
@@ -221,14 +297,20 @@ Create order body:
 ## 6. Project structure
 
 ```
+views/                           # Nunjucks email templates (verify/reset OTP)
+uploads/                         # local file storage (gitignored) - swap for S3/R2 later
 src/
   app.ts, server.ts, config/
-  errors/, interface/, middleware/, utils/, types/express/
-  router/router.ts              # mounts every module
-  seed/seed_admin.ts            # bootstrap first admin
+  errors/, interface/, middleware/ (incl. upload.middleware.ts), types/express/
+  utils/
+    email/email.service.ts       # nodemailer + nunjucks
+    storage/                     # IStorageService + LocalStorageService
+  router/router.ts               # mounts every module
+  seed/seed_admin.ts             # bootstrap first admin
   modules/
-    user/     auth/     shop/
-    product/  stock/    order/  report/
+    user/       auth/      shop/       supplier/
+    product/    stock/     purchase/   order/
+    delivery/   payment/   report/
 ```
 
 Each module follows: `*.model.ts` (Mongoose schema) → `*.interface.ts` (TS

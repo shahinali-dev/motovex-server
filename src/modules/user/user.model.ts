@@ -26,6 +26,16 @@ const userSchema = new Schema<IUser>(
     },
     phone: { type: String, trim: true },
     isActive: { type: Boolean, default: true },
+
+    isVerified: { type: Boolean, default: false },
+    otp: { type: String, select: false, default: null },
+    otpExpires: { type: Date, select: false, default: null },
+
+    resetPasswordOtp: { type: String, select: false, default: null },
+    resetPasswordOtpExpires: { type: Date, select: false, default: null },
+
+    territory: { type: String, trim: true },
+    reportsTo: { type: Schema.Types.ObjectId, ref: "User", default: null },
   },
   {
     timestamps: true,

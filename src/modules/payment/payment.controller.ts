@@ -106,4 +106,19 @@ router.get(
   })
 );
 
+// SR/DSR/DM-wise collection breakdown for a date range (?startDate=&endDate=&receivedBy=).
+router.get(
+  "/collections",
+  isAuth,
+  catchAsync(async (req, res) => {
+    const result = await paymentService.getCollectionsByCollector(req.query);
+    sendResponse(res, {
+      success: true,
+      statusCode: httpStatus.OK,
+      message: "Collection report fetched successfully",
+      data: result,
+    });
+  })
+);
+
 export const paymentRoute = router;

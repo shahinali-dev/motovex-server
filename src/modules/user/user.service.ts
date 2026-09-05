@@ -15,7 +15,10 @@ export class UserService {
     if (existingUser) {
       throw new AppError(httpStatus.BAD_REQUEST, "User already exists");
     }
-    const user = await UserModel.create(payload);
+    const user = await UserModel.create({
+      isVerified: true,
+      ...payload,
+    });
     return UserModel.findById(user._id);
   }
 

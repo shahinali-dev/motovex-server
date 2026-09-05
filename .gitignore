@@ -28,6 +28,10 @@ dist-ssr
 .env.prod
 .env.bak-*
 
+# Locally-stored uploads (purchase invoices/receipts). Move to S3/R2 in
+# production — see src/utils/storage.
+uploads/
+
 # Rendered from the committed *.template.yml files by scripts/pbm-bootstrap.sh.
 # Both hold secrets: R2 credentials and the SMTP password.
 pbm/pbm-config.yml
