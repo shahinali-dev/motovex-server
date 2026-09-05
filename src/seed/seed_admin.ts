@@ -20,6 +20,7 @@ async function seedAdmin() {
     email,
     password: config.SEED_ADMIN_PASSWORD,
     role: Role.ADMIN,
+    isVerified: true,
   });
 
   console.log(`Admin user created: ${email}`);
