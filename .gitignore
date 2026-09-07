@@ -36,3 +36,4 @@ uploads/
 # Both hold secrets: R2 credentials and the SMTP password.
 pbm/pbm-config.yml
 alertmanager/alertmanager.yml
+.vercel
