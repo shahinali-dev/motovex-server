@@ -148,4 +148,20 @@ router.get(
   })
 );
 
+// Home-screen overview: todays sell/purchase/khoroch/profit/due, overall due, low stock.
+router.get(
+  "/overview",
+  isAuth,
+  authorize(Role.ADMIN, Role.MANAGER),
+  catchAsync(async (req, res) => {
+    const data = await reportService.getOverviewReport();
+    sendResponse(res, {
+      success: true,
+      statusCode: httpStatus.OK,
+      message: "Overview report generated successfully",
+      data,
+    });
+  })
+);
+
 export const reportRoute = router;

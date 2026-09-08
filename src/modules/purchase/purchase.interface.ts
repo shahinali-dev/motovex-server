@@ -10,8 +10,15 @@ export interface IPurchaseItem {
   unit: QuantityUnit;
   piecesPerBoxSnapshot: number;
   totalPieces: number; // converted base-unit quantity, used for stock addition
-  unitCostPrice: number; // cost price per single piece paid on this purchase
-  subtotalCost: number;
+  unitCostPrice: number; // raw cost price per piece, as billed by the supplier (before khoroch)
+  subtotalCost: number; // raw, pre-khoroch — this is what's owed to the supplier
+
+  // "Khoroch" (extra purchase cost — transport, import duty, etc.) is
+  // entered once per purchase and spread across every piece in that
+  // purchase. These two fields are the per-item result of that split:
+  // landedUnitCostPrice === unitCostPrice whenever no khoroch was added.
+  landedUnitCostPrice: number; // unitCostPrice + this item's share of extraCost per piece
+  landedSubtotalCost: number; // totalPieces * landedUnitCostPrice
 }
 
 export interface IPurchaseItemInput {
@@ -35,7 +42,14 @@ export interface IPurchase {
   supplier: Types.ObjectId;
   invoiceNumber?: string;
   items: IPurchaseItem[];
-  totalAmount: number;
+  totalAmount: number; // sum of raw subtotalCost — what's owed to the supplier
+
+  // Total "khoroch" (extra cost — carrying/import/transport etc.) for this
+  // purchase, entered once and distributed per-piece across all items.
+  // This is the shop's own operating cost, not part of what's owed to the
+  // supplier, so it's tracked separately from totalAmount.
+  extraCost: number;
+
   status: PurchaseStatus;
 
   paidAmount: number;

@@ -31,6 +31,7 @@ interface ICreatePurchasePayload {
   items: IPurchaseItemInput[];
   notes?: string;
   purchaseDate?: string;
+  extraCost?: number; // total khoroch for this purchase, split per-piece below
 }
 
 export class PurchaseService {
@@ -46,7 +47,7 @@ export class PurchaseService {
     const products = await ProductModel.find({ _id: { $in: productIds } });
     const productMap = new Map(products.map((p) => [String(p._id), p]));
 
-    const items: IPurchaseItem[] = payload.items.map((item) => {
+    const rawItems = payload.items.map((item) => {
       const product = productMap.get(item.product);
       if (!product) {
         throw new AppError(
@@ -75,6 +76,26 @@ export class PurchaseService {
       };
     });
 
+    // Khoroch (extra cost) is opt-in: only when a positive extraCost is
+    // provided do we spread it across every piece in this purchase and
+    // bump each item's landed cost. Leave it out entirely and the landed
+    // cost is simply identical to the raw supplier rate.
+    const extraCost = payload.extraCost && payload.extraCost > 0 ? payload.extraCost : 0;
+    const totalPiecesInPurchase = rawItems.reduce((sum, i) => sum + i.totalPieces, 0);
+    const extraCostPerPiece =
+      extraCost > 0 && totalPiecesInPurchase > 0
+        ? extraCost / totalPiecesInPurchase
+        : 0;
+
+    const items: IPurchaseItem[] = rawItems.map((item) => {
+      const landedUnitCostPrice = item.unitCostPrice + extraCostPerPiece;
+      return {
+        ...item,
+        landedUnitCostPrice,
+        landedSubtotalCost: item.totalPieces * landedUnitCostPrice,
+      };
+    });
+
     const totalAmount = items.reduce((sum, i) => sum + i.subtotalCost, 0);
 
     const purchase = await PurchaseModel.create({
@@ -82,6 +103,7 @@ export class PurchaseService {
       invoiceNumber: payload.invoiceNumber,
       items,
       totalAmount,
+      extraCost,
       status: PurchaseStatus.PENDING,
       purchaseDate: payload.purchaseDate
         ? new Date(payload.purchaseDate)
@@ -174,9 +196,17 @@ export class PurchaseService {
               preventNegative: false,
             });
 
+            // costPricePerPiece is the *effective* cost used everywhere
+            // else (order margin, stock valuation) — it reflects khoroch
+            // when khoroch was added, and is identical to the supplier's
+            // raw rate when it wasn't. lastPurchaseRate keeps the raw,
+            // pre-khoroch supplier rate around purely for display.
             await ProductModel.findByIdAndUpdate(
               item.product,
-              { costPricePerPiece: item.unitCostPrice },
+              {
+                costPricePerPiece: item.landedUnitCostPrice,
+                lastPurchaseRate: item.unitCostPrice,
+              },
               { session }
             );
           }

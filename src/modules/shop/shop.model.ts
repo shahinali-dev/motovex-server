@@ -1,5 +1,5 @@
 import { model, Schema } from "mongoose";
-import { IShop } from "./shop.interface";
+import { IShop, IShopAddress } from "./shop.interface";
 
 const shopSchema = new Schema<IShop>(
   {
@@ -8,7 +8,11 @@ const shopSchema = new Schema<IShop>(
     contactInfo: {
       phone: { type: String, required: true, trim: true },
       email: { type: String, trim: true, lowercase: true },
-      address: { type: String, trim: true },
+    },
+    address: {
+      bazar: { type: String, required: true, trim: true },
+      thana: { type: String, required: true, trim: true },
+      zila: { type: String, required: true, trim: true },
     },
     note: { type: String, trim: true },
     isActive: { type: Boolean, default: true },
@@ -20,6 +24,11 @@ const shopSchema = new Schema<IShop>(
 );
 
 shopSchema.index({ shopName: "text", ownerName: "text" });
+
+// Single-line address string ("Bazar, Thana, Zila") — used to auto-fill a
+// delivery's address whenever the dashboard doesn't override it manually.
+export const formatShopAddress = (address: IShopAddress) =>
+  [address.bazar, address.thana, address.zila].filter(Boolean).join(", ");
 
 const ShopModel = model<IShop>("Shop", shopSchema);
 

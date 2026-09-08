@@ -1,6 +1,7 @@
 import httpStatus from "http-status";
 import { AppError } from "../../errors/app_error";
-import { getPagination } from "../../utils/query_helpers.utils";
+import { getPagination, resolvePeriodRange } from "../../utils/query_helpers.utils";
+import { purchaseService } from "../purchase/purchase.service";
 import { ISupplier } from "./supplier.interface";
 import SupplierModel from "./supplier.model";
 
@@ -24,11 +25,16 @@ export class SupplierService {
       ];
     }
 
+    // Default to A-Z by supplier name; ?sort=-name or ?sort=recent for other orders.
+    const sortMap: Record<string, Record<string, 1 | -1>> = {
+      name: { supplierName: 1 },
+      "-name": { supplierName: -1 },
+      recent: { createdAt: -1 },
+    };
+    const sort = sortMap[query.sort as string] || sortMap.name;
+
     const [data, total] = await Promise.all([
-      SupplierModel.find(filter)
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(limit),
+      SupplierModel.find(filter).sort(sort).skip(skip).limit(limit),
       SupplierModel.countDocuments(filter),
     ]);
 
@@ -60,6 +66,30 @@ export class SupplierService {
     if (!supplier)
       throw new AppError(httpStatus.NOT_FOUND, "Supplier not found");
     return supplier;
+  }
+
+  /**
+   * This supplier's purchase history with the standard preset filters
+   * (date/week/month/3month/6month/1year/lifetime) — shown on the supplier
+   * detail page, right next to a "new purchase" action for this supplier.
+   */
+  async getPurchaseHistory(supplierId: string, query: Record<string, unknown>) {
+    await this.getSupplierById(supplierId); // 404s if the supplier doesn't exist
+
+    const { startDate, endDate } = resolvePeriodRange(
+      query.period as string | undefined
+    );
+
+    return purchaseService.getAllPurchases({
+      ...query,
+      supplier: supplierId,
+      ...(startDate && endDate
+        ? {
+            startDate: startDate.toISOString().slice(0, 10),
+            endDate: endDate.toISOString().slice(0, 10),
+          }
+        : {}),
+    });
   }
 }
 

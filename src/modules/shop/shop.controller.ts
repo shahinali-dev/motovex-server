@@ -58,6 +58,37 @@ router.get(
   })
 );
 
+// Last rate this shop was charged, per product — for the order-creation screen.
+router.get(
+  "/:id/last-rates",
+  isAuth,
+  catchAsync(async (req, res) => {
+    const rates = await shopService.getLastRates(req.params.id);
+    sendResponse(res, {
+      success: true,
+      statusCode: httpStatus.OK,
+      message: "Shop's last given rates fetched successfully",
+      data: rates,
+    });
+  })
+);
+
+// Order history for this shop, with the standard period filter
+// (?period=today|week|month|3month|6month|1year|lifetime).
+router.get(
+  "/:id/orders",
+  isAuth,
+  catchAsync(async (req, res) => {
+    const result = await shopService.getOrderHistory(req.params.id, req.query);
+    sendResponse(res, {
+      success: true,
+      statusCode: httpStatus.OK,
+      message: "Shop order history fetched successfully",
+      data: result,
+    });
+  })
+);
+
 router.patch(
   "/:id",
   isAuth,

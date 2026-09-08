@@ -11,5 +11,9 @@ export interface IDelivery {
   deliveredAt?: Date | null;
   address?: string;
   notes?: string;
+  // Cost of actually running this delivery (fuel, rider fee, etc.) — counted
+  // into "today's khoroch" on the overview dashboard alongside purchase
+  // extraCost. Defaults to 0 and can be filled in/edited any time.
+  deliveryCost?: number;
   createdBy: Types.ObjectId;
 }

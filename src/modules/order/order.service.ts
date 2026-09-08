@@ -5,6 +5,7 @@ import { getPagination, resolveDateRange } from "../../utils/query_helpers.utils
 import { toPieces } from "../../utils/stock_unit.utils";
 import ProductModel from "../product/product.model";
 import ShopModel from "../shop/shop.model";
+import ShopProductPriceModel from "../shop/shop_product_price.model";
 import { StockMovementType } from "../stock/stock.enum";
 import { stockService } from "../stock/stock.service";
 import { NON_SALE_STATUSES, OrderStatus } from "./order.enum";
@@ -21,6 +22,11 @@ const ALLOWED_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
   [OrderStatus.CANCELLED]: [],
   [OrderStatus.RETURNED]: [],
 };
+
+// Order statuses where the line items can still be edited (increase/
+// decrease quantity) — once delivered/cancelled/returned, changes must go
+// through the normal status-transition + a fresh order instead.
+const ITEM_EDITABLE_STATUSES = [OrderStatus.PENDING, OrderStatus.PROCESSING];
 
 interface ICreateOrderPayload {
   shop: string;
@@ -59,15 +65,24 @@ export class OrderService {
 
       const totalPieces = toPieces(item.quantity, item.unit, product.piecesPerBox);
 
-      if (totalPieces > product.stockInPieces) {
-        throw new AppError(
-          httpStatus.BAD_REQUEST,
-          `Insufficient stock for "${product.name}". Available: ${product.stockInPieces} pcs, requested: ${totalPieces} pcs`
-        );
+      // Out-of-stock no longer blocks the order — it's allowed through with
+      // a warning so the sale can still be recorded and the shortfall
+      // purchased/restocked before the shop is actually delivered to.
+      const isBackordered = totalPieces > product.stockInPieces;
+      const shortfallPieces = isBackordered
+        ? totalPieces - product.stockInPieces
+        : 0;
+
+      // Shop-specific sell rate: use whatever the dashboard sent for this
+      // item (e.g. ৳5 off for this particular shop); default to the
+      // product's normal selling price otherwise.
+      const unitSellingPrice = item.unitSellingPrice ?? product.sellingPricePerPiece;
+      if (unitSellingPrice < 0) {
+        throw new AppError(httpStatus.BAD_REQUEST, "Selling price cannot be negative");
       }
 
       const subtotalCost = totalPieces * product.costPricePerPiece;
-      const subtotalAmount = totalPieces * product.sellingPricePerPiece;
+      const subtotalAmount = totalPieces * unitSellingPrice;
 
       return {
         product: product._id as Types.ObjectId,
@@ -78,16 +93,19 @@ export class OrderService {
         piecesPerBoxSnapshot: product.piecesPerBox,
         totalPieces,
         unitCostPrice: product.costPricePerPiece,
-        unitSellingPrice: product.sellingPricePerPiece,
+        unitSellingPrice,
         subtotalCost,
         subtotalAmount,
         profit: subtotalAmount - subtotalCost,
+        isBackordered,
+        shortfallPieces,
       };
     });
 
     const totalAmount = items.reduce((sum, i) => sum + i.subtotalAmount, 0);
     const totalCost = items.reduce((sum, i) => sum + i.subtotalCost, 0);
     const totalProfit = totalAmount - totalCost;
+    const hasStockWarning = items.some((i) => i.isBackordered);
 
     const orderPayload = {
       shop: shop._id,
@@ -96,6 +114,7 @@ export class OrderService {
       totalCost,
       totalProfit,
       status: OrderStatus.PENDING,
+      hasStockWarning,
       orderDate: payload.orderDate ? new Date(payload.orderDate) : new Date(),
       notes: payload.notes,
       createdBy: userId,
@@ -104,16 +123,36 @@ export class OrderService {
     // Try to run stock deduction + order creation atomically. Falls back to a
     // best-effort sequential run on standalone MongoDB instances that don't
     // support multi-document transactions (no replica set configured).
+    let order;
     try {
-      return await this._executeWithTransaction(orderPayload, items, userId);
+      order = await this._executeWithTransaction(orderPayload, items, userId);
     } catch (err) {
       if (err instanceof AppError) throw err;
       const message = (err as Error)?.message || "";
       if (message.toLowerCase().includes("replica set") || message.toLowerCase().includes("transaction")) {
-        return this._executeSequentially(orderPayload, items, userId);
+        order = await this._executeSequentially(orderPayload, items, userId);
+      } else {
+        throw err;
       }
-      throw err;
     }
+
+    // Remember the rate this shop was actually charged for each product, so
+    // the next order for this shop can show "last time: ৳X" as a hint.
+    await Promise.all(
+      items.map((item) =>
+        ShopProductPriceModel.findOneAndUpdate(
+          { shop: shop._id, product: item.product },
+          {
+            lastUnitSellingPrice: item.unitSellingPrice,
+            lastOrder: order!._id,
+            lastOrderDate: new Date(),
+          },
+          { upsert: true }
+        )
+      )
+    );
+
+    return order;
   }
 
   private async _executeWithTransaction(
@@ -137,6 +176,9 @@ export class OrderService {
             orderId: order._id,
             performedBy: userId,
             session,
+            // Backordered items are expected to push stock negative — that's
+            // the whole point of allowing the sale through with a warning.
+            preventNegative: !item.isBackordered,
           });
         }
       });
@@ -160,6 +202,7 @@ export class OrderService {
         note: `Order ${order._id}`,
         orderId: order._id,
         performedBy: userId,
+        preventNegative: !item.isBackordered,
       });
     }
     return order;
@@ -256,6 +299,81 @@ export class OrderService {
 
   async isOrderSaleStatus(status: OrderStatus) {
     return !NON_SALE_STATUSES.includes(status);
+  }
+
+  /**
+   * Increase/decrease how much of one line item this order actually holds
+   * — e.g. shop ordered 10 pcs but only took 5 at delivery time, or the
+   * shop calls back and asks for 3 more. Reconciles stock (returns the
+   * difference to the warehouse on a decrease, deducts more on an
+   * increase) and recalculates the order's totals/profit.
+   */
+  async adjustItemQuantity(
+    orderId: string,
+    productId: string,
+    newQuantity: number,
+    newUnit: "box" | "pieces",
+    userId: Types.ObjectId,
+    note?: string
+  ) {
+    const order = await OrderModel.findById(orderId);
+    if (!order) throw new AppError(httpStatus.NOT_FOUND, "Order not found");
+
+    if (!ITEM_EDITABLE_STATUSES.includes(order.status)) {
+      throw new AppError(
+        httpStatus.BAD_REQUEST,
+        `Cannot change item quantities on an order with status "${order.status}"`
+      );
+    }
+
+    const item = order.items.find((i) => String(i.product) === productId);
+    if (!item) {
+      throw new AppError(httpStatus.NOT_FOUND, "This product is not on the order");
+    }
+
+    if (newQuantity <= 0) {
+      throw new AppError(
+        httpStatus.BAD_REQUEST,
+        "Quantity must be greater than 0 — cancel the order instead to remove it entirely"
+      );
+    }
+
+    const newTotalPieces = toPieces(newQuantity, newUnit, item.piecesPerBoxSnapshot);
+    const deltaPieces = newTotalPieces - item.totalPieces; // +ve = needs more stock, -ve = returns stock
+
+    if (deltaPieces !== 0) {
+      // Positive delta takes more stock (block if truly unavailable);
+      // negative delta returns the difference to the warehouse.
+      await stockService.recordMovement({
+        productId: item.product,
+        type: deltaPieces > 0 ? StockMovementType.ORDER_OUT : StockMovementType.ORDER_RETURN,
+        signedQuantityPieces: -deltaPieces,
+        note: note || `Order ${order._id} item quantity adjusted`,
+        orderId: order._id,
+        performedBy: userId,
+        preventNegative: deltaPieces > 0, // only enforce when taking MORE stock
+      });
+    }
+
+    item.quantity = newQuantity;
+    item.unit = newUnit;
+    item.totalPieces = newTotalPieces;
+    item.subtotalCost = newTotalPieces * item.unitCostPrice;
+    item.subtotalAmount = newTotalPieces * item.unitSellingPrice;
+    item.profit = item.subtotalAmount - item.subtotalCost;
+    // Any adjustment that succeeds here already passed the stock check
+    // above (increases are blocked if stock is short), so this item is no
+    // longer considered backordered.
+    item.isBackordered = false;
+    item.shortfallPieces = 0;
+
+    order.totalAmount = order.items.reduce((sum, i) => sum + i.subtotalAmount, 0);
+    order.totalCost = order.items.reduce((sum, i) => sum + i.subtotalCost, 0);
+    order.totalProfit = order.totalAmount - order.totalCost;
+    order.hasStockWarning = order.items.some((i) => i.isBackordered);
+
+    await order.save();
+    return order;
   }
 }
 

@@ -58,6 +58,25 @@ router.get(
   })
 );
 
+// Purchase history for this supplier, with the standard period filter
+// (?period=today|week|month|3month|6month|1year|lifetime).
+router.get(
+  "/:id/purchases",
+  isAuth,
+  catchAsync(async (req, res) => {
+    const result = await supplierService.getPurchaseHistory(
+      req.params.id,
+      req.query
+    );
+    sendResponse(res, {
+      success: true,
+      statusCode: httpStatus.OK,
+      message: "Supplier purchase history fetched successfully",
+      data: result,
+    });
+  })
+);
+
 router.patch(
   "/:id",
   isAuth,

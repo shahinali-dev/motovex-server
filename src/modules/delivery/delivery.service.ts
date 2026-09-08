@@ -5,6 +5,7 @@ import { getPagination } from "../../utils/query_helpers.utils";
 import OrderModel from "../order/order.model";
 import { OrderStatus } from "../order/order.enum";
 import { orderService } from "../order/order.service";
+import ShopModel, { formatShopAddress } from "../shop/shop.model";
 import UserModel from "../user/user.model";
 import { FIELD_FORCE_ROLES, Role } from "../user/user.enum";
 import { DeliveryStatus } from "./delivery.enum";
@@ -17,6 +18,7 @@ interface ICreateDeliveryPayload {
   scheduledDate?: string;
   address?: string;
   notes?: string;
+  deliveryCost?: number;
 }
 
 const ALLOWED_TRANSITIONS: Record<DeliveryStatus, DeliveryStatus[]> = {
@@ -78,6 +80,12 @@ export class DeliveryService {
 
     await this.assertFieldForceUser(payload.assignedTo);
 
+    // Auto-fill the delivery address from the shop's saved
+    // Bazar/Thana/Zila unless the dashboard explicitly overrides it.
+    const shopDoc = await ShopModel.findById(order.shop);
+    const address =
+      payload.address || (shopDoc ? formatShopAddress(shopDoc.address) : undefined);
+
     const delivery = await DeliveryModel.create({
       order: order._id,
       shop: order.shop,
@@ -85,11 +93,24 @@ export class DeliveryService {
       scheduledDate: payload.scheduledDate
         ? new Date(payload.scheduledDate)
         : undefined,
-      address: payload.address,
+      address,
       notes: payload.notes,
+      deliveryCost: payload.deliveryCost || 0,
       createdBy: userId,
     });
 
+    return delivery;
+  }
+
+  /** Set/update the actual cost of running this delivery (fuel, rider fee, etc). */
+  async updateDeliveryCost(id: string, deliveryCost: number) {
+    const delivery = await DeliveryModel.findByIdAndUpdate(
+      id,
+      { deliveryCost },
+      { new: true, runValidators: true }
+    );
+    if (!delivery)
+      throw new AppError(httpStatus.NOT_FOUND, "Delivery not found");
     return delivery;
   }
 

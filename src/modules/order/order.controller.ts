@@ -77,4 +77,29 @@ router.patch(
   })
 );
 
+// Adjust how much of one line item this order actually holds — e.g. shop
+// ordered 10 pcs, only took 5 at delivery. Reconciles stock automatically.
+router.patch(
+  "/:id/items/:productId",
+  isAuth,
+  authorize(Role.ADMIN, Role.MANAGER, Role.STAFF, Role.DM),
+  validateRequest(orderValidation.adjustOrderItemValidationSchema),
+  catchAsync(async (req, res) => {
+    const order = await orderService.adjustItemQuantity(
+      req.params.id,
+      req.params.productId,
+      req.body.quantity,
+      req.body.unit,
+      req.user!._id,
+      req.body.note
+    );
+    sendResponse(res, {
+      success: true,
+      statusCode: httpStatus.OK,
+      message: "Order item quantity updated successfully",
+      data: order,
+    });
+  })
+);
+
 export const orderRoute = router;
