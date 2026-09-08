@@ -5,6 +5,8 @@ const orderItemInputSchema = z.object({
   product: z.string().min(1, "product id is required"),
   quantity: z.number().positive("quantity must be greater than 0"),
   unit: z.enum(["box", "pieces"]),
+  // Optional shop-specific override of this product's selling price.
+  unitSellingPrice: z.number().min(0).optional(),
 });
 
 const createOrderValidationSchema = z.object({
@@ -25,7 +27,14 @@ const updateOrderStatusValidationSchema = z.object({
   note: z.string().optional(),
 });
 
+const adjustOrderItemValidationSchema = z.object({
+  quantity: z.number().positive("quantity must be greater than 0"),
+  unit: z.enum(["box", "pieces"]),
+  note: z.string().optional(),
+});
+
 export const orderValidation = {
   createOrderValidationSchema,
   updateOrderStatusValidationSchema,
+  adjustOrderItemValidationSchema,
 };

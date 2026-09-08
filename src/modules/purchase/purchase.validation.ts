@@ -15,6 +15,9 @@ const createPurchaseValidationSchema = z.object({
   items: z.array(purchaseItemSchema).min(1, "At least one item is required"),
   notes: z.string().optional(),
   purchaseDate: z.string().optional(),
+  // Total khoroch (extra cost) for this purchase — optional, spread
+  // per-piece across all items on the server. Omit or send 0 to skip it.
+  extraCost: z.number().min(0).optional(),
 });
 
 const updatePurchaseStatusValidationSchema = z.object({

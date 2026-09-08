@@ -633,6 +633,95 @@ export class ReportService {
 
     return { range: { startDate, endDate }, data };
   }
+
+  // ---------------------------------------------------------------------
+  // 8. Overview - the dashboard's home-screen stat cards, all in one call:
+  // todays sell/purchase/khoroch/profit/due, overall due, low stock.
+  // ---------------------------------------------------------------------
+  async getOverviewReport() {
+    const startOfDay = new Date();
+    startOfDay.setHours(0, 0, 0, 0);
+    const endOfDay = new Date();
+    endOfDay.setHours(23, 59, 59, 999);
+    const todayMatch = { $gte: startOfDay, $lte: endOfDay };
+
+    const [todaysSell] = await OrderModel.aggregate([
+      { $match: { ...SALE_MATCH, orderDate: todayMatch } },
+      {
+        $group: {
+          _id: null,
+          totalOrders: { $sum: 1 },
+          totalAmount: { $sum: "$totalAmount" },
+          totalCost: { $sum: "$totalCost" },
+          totalProfit: { $sum: "$totalProfit" },
+          totalDue: { $sum: { $subtract: ["$totalAmount", "$paidAmount"] } },
+        },
+      },
+      { $project: { _id: 0 } },
+    ]);
+
+    const [todaysPurchase] = await PurchaseModel.aggregate([
+      { $match: { ...PURCHASE_MATCH, purchaseDate: todayMatch } },
+      {
+        $group: {
+          _id: null,
+          totalPurchases: { $sum: 1 },
+          totalAmount: { $sum: "$totalAmount" },
+          totalExtraCost: { $sum: "$extraCost" },
+        },
+      },
+      { $project: { _id: 0 } },
+    ]);
+
+    const [todaysDeliveryCost] = await DeliveryModel.aggregate([
+      { $match: { createdAt: todayMatch } },
+      { $group: { _id: null, totalDeliveryCost: { $sum: "$deliveryCost" } } },
+      { $project: { _id: 0 } },
+    ]);
+
+    // "Todays khoroch" = purchase-side extra cost (import/transport on
+    // purchases received today) + delivery-side cost (fuel/rider fee for
+    // deliveries run today). Named consistently across the whole dashboard.
+    const todaysExpense =
+      (todaysPurchase?.totalExtraCost || 0) +
+      (todaysDeliveryCost?.totalDeliveryCost || 0);
+
+    const todaysNetProfit = (todaysSell?.totalProfit || 0) - todaysExpense;
+
+    const [overallDueAgg] = await OrderModel.aggregate([
+      { $match: SALE_MATCH },
+      {
+        $group: {
+          _id: null,
+          overallDue: { $sum: { $subtract: ["$totalAmount", "$paidAmount"] } },
+        },
+      },
+      { $project: { _id: 0 } },
+    ]);
+
+    const lowStockProducts = await this.getLowStockAlert();
+
+    return {
+      date: startOfDay.toISOString().slice(0, 10),
+      todaysSell: {
+        totalOrders: todaysSell?.totalOrders || 0,
+        totalAmount: todaysSell?.totalAmount || 0,
+      },
+      todaysPurchase: {
+        totalPurchases: todaysPurchase?.totalPurchases || 0,
+        totalAmount: todaysPurchase?.totalAmount || 0,
+      },
+      // Standard name used everywhere on the dashboard for this figure.
+      todaysExpense,
+      todaysProfit: todaysNetProfit,
+      todaysDue: todaysSell?.totalDue || 0,
+      overallDue: overallDueAgg?.overallDue || 0,
+      lowStock: {
+        count: lowStockProducts.length,
+        products: lowStockProducts,
+      },
+    };
+  }
 }
 
 export const reportService = new ReportService();

@@ -7,6 +7,7 @@ const createDeliveryValidationSchema = z.object({
   scheduledDate: z.string().optional(),
   address: z.string().optional(),
   notes: z.string().optional(),
+  deliveryCost: z.number().min(0).optional(),
 });
 
 const updateDeliveryStatusValidationSchema = z.object({
@@ -23,8 +24,13 @@ const assignDeliveryValidationSchema = z.object({
   assignedTo: z.string().min(1, "assignedTo (SR/DSR/DM user id) is required"),
 });
 
+const updateDeliveryCostValidationSchema = z.object({
+  deliveryCost: z.number().min(0, "deliveryCost cannot be negative"),
+});
+
 export const deliveryValidation = {
   createDeliveryValidationSchema,
   updateDeliveryStatusValidationSchema,
   assignDeliveryValidationSchema,
+  updateDeliveryCostValidationSchema,
 };

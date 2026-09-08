@@ -6,12 +6,15 @@ const productSchema = new Schema<IProduct>(
     name: { type: String, required: true, trim: true },
     sku: { type: String, required: true, unique: true, trim: true, uppercase: true },
     category: { type: String, trim: true },
+    categoryId: { type: Schema.Types.ObjectId, ref: "Category" },
     brand: { type: String, trim: true },
     description: { type: String, trim: true },
 
-    piecesPerBox: { type: Number, required: true, min: 1, default: 1 },
+    // Most Motovex products ship 1 box = 12 pieces; UI can still override.
+    piecesPerBox: { type: Number, required: true, min: 1, default: 12 },
 
     costPricePerPiece: { type: Number, required: true, min: 0 },
+    lastPurchaseRate: { type: Number, min: 0 },
     sellingPricePerPiece: { type: Number, required: true, min: 0 },
     boxCostPrice: { type: Number, min: 0 },
     boxSellingPrice: { type: Number, min: 0 },

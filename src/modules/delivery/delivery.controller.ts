@@ -98,4 +98,23 @@ router.patch(
   })
 );
 
+router.patch(
+  "/:id/cost",
+  isAuth,
+  authorize(Role.ADMIN, Role.MANAGER, Role.STAFF, Role.DM),
+  validateRequest(deliveryValidation.updateDeliveryCostValidationSchema),
+  catchAsync(async (req, res) => {
+    const delivery = await deliveryService.updateDeliveryCost(
+      req.params.id,
+      req.body.deliveryCost
+    );
+    sendResponse(res, {
+      success: true,
+      statusCode: httpStatus.OK,
+      message: "Delivery cost updated successfully",
+      data: delivery,
+    });
+  })
+);
+
 export const deliveryRoute = router;

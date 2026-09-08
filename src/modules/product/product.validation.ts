@@ -2,11 +2,12 @@ import { z } from "zod";
 
 const createProductValidationSchema = z.object({
   name: z.string().min(1, "Product name is required"),
-  sku: z.string().min(1, "SKU is required"),
+  // Optional: leave blank in the UI to auto-generate from category + brand.
+  sku: z.string().min(1).optional(),
   category: z.string().optional(),
   brand: z.string().optional(),
   description: z.string().optional(),
-  piecesPerBox: z.number().int().positive("piecesPerBox must be >= 1"),
+  piecesPerBox: z.number().int().positive("piecesPerBox must be >= 1").default(12),
   costPricePerPiece: z.number().nonnegative(),
   sellingPricePerPiece: z.number().nonnegative(),
   boxCostPrice: z.number().nonnegative().optional(),

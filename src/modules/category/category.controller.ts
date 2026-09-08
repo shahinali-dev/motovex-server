@@ -6,8 +6,8 @@ import validateRequest from "../../middleware/validate_request.middleware";
 import catchAsync from "../../utils/catch_async.utils";
 import sendResponse from "../../utils/send_response.utils";
 import { Role } from "../user/user.enum";
-import { productService } from "./product.service";
-import { productValidation } from "./product.validation";
+import { categoryService } from "./category.service";
+import { categoryValidation } from "./category.validation";
 
 const router = Router();
 
@@ -15,17 +15,17 @@ router.post(
   "/",
   isAuth,
   authorize(Role.ADMIN, Role.MANAGER),
-  validateRequest(productValidation.createProductValidationSchema),
+  validateRequest(categoryValidation.createCategoryValidationSchema),
   catchAsync(async (req, res) => {
-    const product = await productService.createProduct(
-      req.body,
-      req.user!._id
-    );
+    const category = await categoryService.createCategory({
+      ...req.body,
+      createdBy: req.user!._id,
+    });
     sendResponse(res, {
       success: true,
       statusCode: httpStatus.CREATED,
-      message: "Product created successfully",
-      data: product,
+      message: "Category created successfully",
+      data: category,
     });
   })
 );
@@ -34,29 +34,12 @@ router.get(
   "/",
   isAuth,
   catchAsync(async (req, res) => {
-    const result = await productService.getAllProducts(req.query);
+    const result = await categoryService.getAllCategories(req.query);
     sendResponse(res, {
       success: true,
       statusCode: httpStatus.OK,
-      message: "Products fetched successfully",
+      message: "Categories fetched successfully",
       data: result,
-    });
-  })
-);
-
-// NOTE: must be registered before "/:id" so "brands" isn't parsed as an id.
-router.get(
-  "/brands/list",
-  isAuth,
-  catchAsync(async (req, res) => {
-    const brands = await productService.getDistinctBrands(
-      req.query.search as string | undefined
-    );
-    sendResponse(res, {
-      success: true,
-      statusCode: httpStatus.OK,
-      message: "Brands fetched successfully",
-      data: brands,
     });
   })
 );
@@ -65,12 +48,12 @@ router.get(
   "/:id",
   isAuth,
   catchAsync(async (req, res) => {
-    const product = await productService.getProductById(req.params.id);
+    const category = await categoryService.getCategoryById(req.params.id);
     sendResponse(res, {
       success: true,
       statusCode: httpStatus.OK,
-      message: "Product fetched successfully",
-      data: product,
+      message: "Category fetched successfully",
+      data: category,
     });
   })
 );
@@ -79,17 +62,17 @@ router.patch(
   "/:id",
   isAuth,
   authorize(Role.ADMIN, Role.MANAGER),
-  validateRequest(productValidation.updateProductValidationSchema),
+  validateRequest(categoryValidation.updateCategoryValidationSchema),
   catchAsync(async (req, res) => {
-    const product = await productService.updateProduct(
+    const category = await categoryService.updateCategory(
       req.params.id,
       req.body
     );
     sendResponse(res, {
       success: true,
       statusCode: httpStatus.OK,
-      message: "Product updated successfully",
-      data: product,
+      message: "Category updated successfully",
+      data: category,
     });
   })
 );
@@ -99,14 +82,14 @@ router.delete(
   isAuth,
   authorize(Role.ADMIN),
   catchAsync(async (req, res) => {
-    await productService.deleteProduct(req.params.id);
+    await categoryService.deleteCategory(req.params.id);
     sendResponse(res, {
       success: true,
       statusCode: httpStatus.OK,
-      message: "Product deleted successfully",
+      message: "Category deleted successfully",
       data: null,
     });
   })
 );
 
-export const productRoute = router;
+export const categoryRoute = router;

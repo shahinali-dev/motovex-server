@@ -17,6 +17,8 @@ const purchaseItemSchema = new Schema<IPurchaseItem>(
     totalPieces: { type: Number, required: true },
     unitCostPrice: { type: Number, required: true },
     subtotalCost: { type: Number, required: true },
+    landedUnitCostPrice: { type: Number, required: true },
+    landedSubtotalCost: { type: Number, required: true },
   },
   { _id: false }
 );
@@ -45,6 +47,8 @@ const purchaseSchema = new Schema<IPurchase>(
       },
     },
     totalAmount: { type: Number, required: true, default: 0 },
+    // Purchase-level khoroch (extra cost) — see IPurchase for details.
+    extraCost: { type: Number, required: true, default: 0, min: 0 },
     status: {
       type: String,
       enum: Object.values(PurchaseStatus),
@@ -72,6 +76,12 @@ const purchaseSchema = new Schema<IPurchase>(
 
 purchaseSchema.virtual("dueAmount").get(function (this: IPurchase) {
   return Math.max(this.totalAmount - this.paidAmount, 0);
+});
+
+// What this purchase actually cost the business once khoroch is folded in
+// (supplier bill + extra cost) — used by daily "todays khoroch"/profit reports.
+purchaseSchema.virtual("totalLandedCost").get(function (this: IPurchase) {
+  return this.totalAmount + (this.extraCost || 0);
 });
 
 purchaseSchema.index({ supplier: 1, purchaseDate: -1 });

@@ -16,6 +16,7 @@ const deliverySchema = new Schema<IDelivery>(
     deliveredAt: { type: Date, default: null },
     address: { type: String, trim: true },
     notes: { type: String, trim: true },
+    deliveryCost: { type: Number, default: 0, min: 0 },
     createdBy: { type: Schema.Types.ObjectId, ref: "User", required: true },
   },
   {

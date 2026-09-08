@@ -16,6 +16,8 @@ const orderItemSchema = new Schema<IOrderItem>(
     subtotalCost: { type: Number, required: true },
     subtotalAmount: { type: Number, required: true },
     profit: { type: Number, required: true },
+    isBackordered: { type: Boolean, default: false },
+    shortfallPieces: { type: Number, default: 0 },
   },
   { _id: false }
 );
@@ -39,6 +41,7 @@ const orderSchema = new Schema<IOrder>(
       enum: Object.values(OrderStatus),
       default: OrderStatus.PENDING,
     },
+    hasStockWarning: { type: Boolean, default: false },
 
     paidAmount: { type: Number, required: true, default: 0, min: 0 },
     paymentStatus: {

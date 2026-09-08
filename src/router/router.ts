@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { authRoute } from "../modules/auth/auth.controller";
+import { categoryRoute } from "../modules/category/category.controller";
 import { deliveryRoute } from "../modules/delivery/delivery.controller";
 import { orderRoute } from "../modules/order/order.controller";
 import { paymentRoute } from "../modules/payment/payment.controller";
@@ -22,6 +23,7 @@ const moduleRoutes = [
   // works for API consumers without duplicating any logic.
   { path: "/api/v1/customers", route: shopRoute },
   { path: "/api/v1/suppliers", route: supplierRoute },
+  { path: "/api/v1/categories", route: categoryRoute },
   { path: "/api/v1/products", route: productRoute },
   { path: "/api/v1/stock", route: stockRoute },
   { path: "/api/v1/purchases", route: purchaseRoute },
